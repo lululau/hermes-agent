@@ -123,6 +123,13 @@ _PLATFORM_OVERRIDES: dict[str, dict[str, Any]] = {
             "WECOM_CALLBACK_CORP_ID", "WECOM_CALLBACK_CORP_SECRET", "WECOM_CALLBACK_AGENT_ID",
         ),
     },
+    "wecom_stream": {
+        "name": "WeCom Stream",
+        "description": "Streaming WeCom adapter with real-time typing indicators via reply_stream.",
+        "docs_url": "https://developer.work.weixin.qq.com/document/path/99835",
+        "env_vars": ("WECOM_STREAM_BOT_ID", "WECOM_STREAM_SECRET"),
+        "required_env": ("WECOM_STREAM_BOT_ID", "WECOM_STREAM_SECRET"),
+    },
     "weixin": {
         "name": "Weixin / WeChat (Personal)",
         "description": "Connect a personal WeChat account through Tencent's iLink Bot API.",
