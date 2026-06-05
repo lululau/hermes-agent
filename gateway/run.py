@@ -9486,6 +9486,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             }
             await self.hooks.emit("agent:start", hook_ctx)
 
+            # Send typing indicator (mirrors proxy path at _run_agent_via_proxy)
+            _typing_adapter = self.adapters.get(source.platform)
+            if _typing_adapter:
+                try:
+                    await _typing_adapter.send_typing(source.chat_id)
+                except Exception:
+                    pass
+
             # Run the agent
             agent_result = await self._run_agent(
                 message=message_text,
