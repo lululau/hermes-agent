@@ -2178,6 +2178,21 @@ class GatewayTurnMixin:
             }
             await self.hooks.emit("agent:start", hook_ctx)
 
+            # Send typing indicator (mirrors proxy path at _run_agent_via_proxy).
+            # Resolve via _delivery_adapter_for so plugin platforms, profiles, and
+            # relay ingress all get the live adapter — adapters.get(platform)
+            # misses those.
+            try:
+                _typing_adapter = self._delivery_adapter_for(source)
+                if _typing_adapter:
+                    _typing_anchor = self._reply_anchor_for_event(event)
+                    await _typing_adapter.send_typing(
+                        source.chat_id,
+                        metadata=self._thread_metadata_for_source(source, _typing_anchor),
+                    )
+            except Exception:
+                pass
+
             # Capture the launch session id so post-run compression publication is identity-guarded
             # (a /new may move session_entry.session_id while the old run is still unwinding).
             from gateway.run_heartbeat_acceptance import heartbeat_owner_is_current
