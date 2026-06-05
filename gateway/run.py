@@ -17376,6 +17376,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             }
             await self.hooks.emit("agent:start", hook_ctx)
 
+            # Send typing indicator (mirrors proxy path at _run_agent_via_proxy)
+            _typing_adapter = self.adapters.get(source.platform)
+            if _typing_adapter:
+                try:
+                    await _typing_adapter.send_typing(source.chat_id)
+                except Exception:
+                    pass
+
             # Run the agent. Capture the session id that this run was launched
             # against so post-run compression publication can be identity-guarded
             # below; a /new or another lifecycle transition may move
