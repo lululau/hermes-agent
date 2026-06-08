@@ -199,3 +199,166 @@ class TestSendViaAdapterCrossLoopDispatch:
             gateway_loop.call_soon_threadsafe(gateway_loop.stop)
             t.join(timeout=2)
             gateway_loop.close()
+
+    @pytest.mark.asyncio
+    async def test_cross_loop_dispatches_send_media_to_gateway_loop(
+        self, monkeypatch, tmp_path
+    ):
+        """plugin send_media() must hop to the gateway loop, same as send()."""
+        from tools.send_message_tool import _send_via_adapter
+
+        send_loop_id = {}
+        recorded = {}
+        platform = SimpleNamespace(value="wecom_stream")
+        adapter_key = platform.value
+        media_path = tmp_path / "photo.png"
+        media_path.write_bytes(b"png")
+
+        class FakeAdapter:
+            async def send_media(self, *, chat_id, file_path, media_type, metadata=None):
+                send_loop_id["loop"] = id(asyncio.get_running_loop())
+                recorded["chat_id"] = chat_id
+                recorded["file_path"] = file_path
+                recorded["media_type"] = media_type
+                return SimpleNamespace(success=True, message_id="media-ok")
+
+            async def send(self, *, chat_id, content, metadata=None):
+                raise AssertionError("text send should not run for media-only")
+
+        gateway_loop = asyncio.new_event_loop()
+        started = threading.Event()
+
+        def run_gateway():
+            asyncio.set_event_loop(gateway_loop)
+            started.set()
+            gateway_loop.run_forever()
+
+        t = threading.Thread(target=run_gateway, daemon=True)
+        t.start()
+        started.wait(timeout=2)
+
+        try:
+            runner = SimpleNamespace(
+                adapters={adapter_key: FakeAdapter()},
+                _gateway_loop=gateway_loop,
+            )
+            fake_gateway_run = ModuleType("gateway.run")
+            fake_gateway_run._gateway_runner_ref = lambda: runner
+            monkeypatch.setitem(sys.modules, "gateway.run", fake_gateway_run)
+
+            result = await _send_via_adapter(
+                platform,
+                SimpleNamespace(extra={}),
+                "wr_group_media",
+                "",
+                media_files=[(str(media_path), False)],
+            )
+
+            assert result == {
+                "success": True,
+                "message_id": "media-ok",
+                "media_delivered": True,
+            }
+            assert send_loop_id["loop"] == id(gateway_loop)
+            assert recorded["media_type"] == "image"
+            assert recorded["file_path"] == str(media_path)
+        finally:
+            gateway_loop.call_soon_threadsafe(gateway_loop.stop)
+            t.join(timeout=2)
+            gateway_loop.close()
+
+    @pytest.mark.asyncio
+    async def test_native_send_image_file_when_adapter_has_no_send_media(
+        self, monkeypatch, tmp_path
+    ):
+        """Adapters without send_media use BasePlatformAdapter native methods."""
+        from tools.send_message_tool import _send_via_adapter
+
+        recorded = {}
+        platform = Platform("wecom")
+        image_path = tmp_path / "shot.jpg"
+        image_path.write_bytes(b"jpg")
+
+        class FakeAdapter:
+            async def send_image_file(self, chat_id, image_path, **kwargs):
+                recorded["image_path"] = image_path
+                recorded["chat_id"] = chat_id
+                recorded["kwargs"] = kwargs
+                return SimpleNamespace(success=True, message_id="img-ok")
+
+            async def send(self, *, chat_id, content, metadata=None):
+                raise AssertionError(
+                    "caption should ride on the media bubble, not a separate send"
+                )
+
+        runner = SimpleNamespace(adapters={platform: FakeAdapter()})
+        fake_gateway_run = ModuleType("gateway.run")
+        fake_gateway_run._gateway_runner_ref = lambda: runner
+        monkeypatch.setitem(sys.modules, "gateway.run", fake_gateway_run)
+
+        result = await _send_via_adapter(
+            platform,
+            SimpleNamespace(extra={}),
+            "wr_group_native",
+            "caption",
+            media_files=[(str(image_path), False)],
+        )
+
+        assert result == {
+            "success": True,
+            "message_id": "img-ok",
+            "media_delivered": True,
+        }
+        assert recorded["image_path"] == str(image_path)
+        assert recorded["kwargs"]["caption"] == "caption"
+
+
+def test_plugin_platform_media_only_is_not_rejected(monkeypatch, tmp_path):
+    """Plugin platforms (not in Platform enum) must not hit the builtin MEDIA gate."""
+    from tools.send_message_tool import _send_to_platform
+
+    platform = SimpleNamespace(value="wecom_stream")
+    recorded = {}
+    clip_path = tmp_path / "clip.mp4"
+    clip_path.write_bytes(b"mp4")
+
+    class FakeAdapter:
+        async def send_media(self, *, chat_id, file_path, media_type, metadata=None):
+            recorded["file_path"] = file_path
+            recorded["media_type"] = media_type
+            return SimpleNamespace(success=True, message_id="plugin-media")
+
+        async def send(self, *, chat_id, content, metadata=None):
+            raise AssertionError("media-only send should not call send()")
+
+    runner = SimpleNamespace(adapters={platform.value: FakeAdapter()})
+    fake_gateway_run = ModuleType("gateway.run")
+    fake_gateway_run._gateway_runner_ref = lambda: runner
+    monkeypatch.setitem(sys.modules, "gateway.run", fake_gateway_run)
+
+    pconfig = SimpleNamespace(enabled=True, token=None, extra={})
+    result = asyncio.run(
+        _send_to_platform(
+            platform,
+            pconfig,
+            "wo_user_1",
+            "",
+            media_files=[(str(clip_path), False)],
+        )
+    )
+
+    assert result == {
+        "success": True,
+        "message_id": "plugin-media",
+        "media_delivered": True,
+    }
+    assert recorded["media_type"] == "video"
+
+
+def test_media_type_for_plugin_send_uses_shared_extension_sets():
+    from tools.send_message_tool import _media_type_for_plugin_send
+
+    assert _media_type_for_plugin_send("/x.png", False) == "image"
+    assert _media_type_for_plugin_send("/x.mp4", False) == "video"
+    assert _media_type_for_plugin_send("/x.ogg", True) == "voice"
+    assert _media_type_for_plugin_send("/x.pdf", False) == "file"
