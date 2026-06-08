@@ -477,11 +477,31 @@ def _bounded_send_error(detail, max_chars=900):
     return text if len(text) <= max_chars else f"{text[: max_chars - 3]}..."
 
 
+def _media_type_for_plugin_send(file_path: str, is_voice: bool) -> str:
+    """Map a local path onto the ``send_media`` type vocabulary plugin adapters use."""
+    if is_voice:
+        return "voice"
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext in _IMAGE_EXTS or ext == ".bmp":
+        return "image"
+    if ext in _VIDEO_EXTS:
+        return "video"
+    if ext in _AUDIO_EXTS or ext in _VOICE_EXTS or ext in {".aac", ".silk"}:
+        return "voice"
+    return "file"
+
+
 async def _send_live_adapter_media(adapter, chat_id, message, media_files, *, thread_id=None, metadata=None,
                                    force_document=False):
     """Deliver text and every media descriptor through adapter media APIs; adapters that only
     inherit the BasePlatformAdapter stub for a kind are unsupported, not no-op'd."""
     caption, separate_text = _media_caption_split(message, media_files, max_caption_len=_DEFAULT_CAPTION_LIMIT)
+    plugin_send_media = (
+        adapter.send_media if hasattr(adapter, "send_media") else None
+    )
+    if plugin_send_media is not None and caption:
+        separate_text = caption
+        caption = None
     last_result = None
     if separate_text and separate_text.strip():
         last_result = await adapter.send(chat_id=chat_id, content=separate_text, metadata=metadata)
@@ -497,6 +517,35 @@ async def _send_live_adapter_media(adapter, chat_id, message, media_files, *, th
         if not os.path.exists(media_path):
             return {"error": f"Adapter media send failed: media file {index + 1}/{total} was not found"}
         ext = os.path.splitext(media_path)[1].lower()
+        if plugin_send_media is not None:
+            # Single-method plugin adapters deliver every kind through
+            # send_media; ``force_document`` maps onto the plain "file" type.
+            media_type = "file" if force_document else _media_type_for_plugin_send(
+                media_path, is_voice
+            )
+            try:
+                last_result = await plugin_send_media(
+                    chat_id=chat_id,
+                    file_path=media_path,
+                    media_type=media_type,
+                    metadata=metadata,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                return {
+                    "error": (
+                        f"Adapter media send failed after {index}/{total} files: "
+                        f"{_bounded_send_error(exc)}"
+                    )
+                }
+            if not last_result.success:
+                detail = _bounded_send_error(last_result.error or "media send failed")
+                return {
+                    "error": f"Adapter media send failed after {index}/{total} files: {detail}"
+                }
+            continue
+
         method_name, media_kind = _adapter_media_method(ext, is_voice or ext in _AUDIO_EXTS, force_document)
         adapter_method = getattr(type(adapter), method_name, None)
         if adapter_method is None or adapter_method is getattr(BasePlatformAdapter, method_name):
@@ -542,6 +591,11 @@ async def _send_via_adapter(platform, pconfig, chat_id, chunk, *, thread_id=None
     else an error naming both; media uses the adapter's native media APIs under the same rules."""
     platform_name = platform.value if hasattr(platform, "value") else str(platform)
     runner, adapter = _live_adapter(platform)
+    if adapter is None and runner is not None:
+        try:
+            adapter = runner.adapters.get(platform_name)
+        except Exception:
+            adapter = None
     if adapter is not None:
         try:
             metadata = {**({"thread_id": thread_id} if thread_id else {}),
@@ -714,8 +768,10 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
             platform, pconfig, chat_id, chunk, media_files if is_last else empty_media, thread_id, force_document))
 
     # Generic path: text only. Buzz delivers media natively via _send_via_adapter, so no warning.
+    _builtin_values = {member.value for member in Platform}
+    is_builtin = platform_name in _builtin_values
     warning = None
-    if media_files and platform_name != "buzz":
+    if media_files and is_builtin and platform_name != "buzz":
         if not message.strip():
             return {"error": (f"send_message MEDIA delivery is currently only supported for {_MEDIA_PLATFORMS_NOTE}; "
                               f"target {platform_name} had only media attachments")}
