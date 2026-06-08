@@ -553,6 +553,18 @@ def _parse_target_ref(platform_name: str, target_ref: str):
     return None, None, False
 
 
+def _infer_media_type(file_path: str) -> str:
+    """Infer WeCom media type from file extension."""
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"):
+        return "image"
+    if ext in (".mp4", ".mov", ".avi", ".mkv"):
+        return "video"
+    if ext in (".mp3", ".aac", ".wav", ".m4a", ".ogg", ".silk"):
+        return "voice"
+    return "file"
+
+
 def _describe_media_for_mirror(media_files):
     """Return a human-readable mirror summary when a message only contains media."""
     if not media_files:
@@ -661,6 +673,30 @@ async def _send_via_adapter(
                     metadata["publish_topic"] = chat_id
                 if not metadata:
                     metadata = None
+                # If media files are present and the adapter supports
+                # send_media(), delegate to it for native file delivery.
+                if media_files and hasattr(adapter, "send_media"):
+                    last_media_result = None
+                    for mf_idx, (mf_path, is_voice) in enumerate(media_files):
+                        media_type = "voice" if is_voice else _infer_media_type(mf_path)
+                        result = await adapter.send_media(
+                            chat_id=chat_id,
+                            file_path=mf_path,
+                            media_type=media_type,
+                            metadata=metadata,
+                        )
+                        if hasattr(result, "success") and result.success:
+                            last_media_result = {"success": True, "message_id": getattr(result, "message_id")}
+                        else:
+                            err = result.error if hasattr(result, "error") else str(result)
+                            return {"error": f"Adapter send_media failed: {err}"}
+                    # After sending media, also send any remaining text chunk
+                    if chunk and chunk.strip():
+                        result = await adapter.send(chat_id=chat_id, content=chunk, metadata=metadata)
+                        if result.success:
+                            return {"success": True, "message_id": result.message_id}
+                        return {"error": f"Adapter send failed: {result.error}"}
+                    return last_media_result or {"success": True}
                 result = await adapter.send(chat_id=chat_id, content=chunk, metadata=metadata)
             except asyncio.CancelledError:
                 raise
@@ -897,18 +933,26 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
         return last_result
 
     # --- Non-media platforms ---
-    if media_files and not message.strip():
+    # Platforms that support media natively (via adapter send_media or
+    # dedicated handlers) should NOT be blocked here. Only block truly
+    # text-only platforms.
+    _text_only_platforms = {
+        Platform.SLACK, Platform.WHATSAPP, Platform.EMAIL, Platform.SMS,
+        Platform.DINGTALK, Platform.QQBOT, Platform.BLUEBUBBLES,
+        Platform.WECOM, Platform.WECOM_CALLBACK,
+    }
+    if media_files and not message.strip() and platform in _text_only_platforms:
         return {
             "error": (
-                f"send_message MEDIA delivery is currently only supported for telegram, discord, matrix, weixin, signal, yuanbao and feishu; "
+                f"send_message MEDIA delivery is currently only supported for telegram, discord, matrix, weixin, signal, yuanbao, feishu and plugin platforms with send_media; "
                 f"target {platform.value} had only media attachments"
             )
         }
     warning = None
-    if media_files:
+    if media_files and platform in _text_only_platforms:
         warning = (
             f"MEDIA attachments were omitted for {platform.value}; "
-            "native send_message media delivery is currently only supported for telegram, discord, matrix, weixin, signal, yuanbao and feishu"
+            "native send_message media delivery is currently only supported for telegram, discord, matrix, weixin, signal, yuanbao, feishu and plugin platforms with send_media"
         )
 
     last_result = None
