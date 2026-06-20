@@ -569,6 +569,22 @@ def _is_minimax_anthropic_endpoint(base_url: str | None) -> bool:
     )
 
 
+def _is_bigmodel_anthropic_endpoint(base_url: str | None) -> bool:
+    """Return True for Z.AI / Zhipu BigModel Anthropic-compatible endpoints.
+
+    BigModel (open.bigmodel.cn/api/anthropic) rejects the
+    fine-grained-tool-streaming beta — requests with it trigger a
+    connection error, same symptom as MiniMax.
+    """
+    normalized = _normalize_base_url_text(base_url)
+    if not normalized:
+        return False
+    normalized = normalized.rstrip("/").lower()
+    return normalized.startswith(
+        ("https://open.bigmodel.cn/api/anthropic", "https://api.z.ai/api/anthropic")
+    )
+
+
 def _is_azure_anthropic_endpoint(base_url: str | None) -> bool:
     """Return True for Azure-hosted Anthropic Messages endpoints.
 
@@ -617,6 +633,9 @@ def _common_betas_for_base_url(
     if _base_url_needs_context_1m_beta(base_url) and not drop_context_1m_beta:
         betas.append(_CONTEXT_1M_BETA)
     if _is_minimax_anthropic_endpoint(base_url):
+        _stripped = {_TOOL_STREAMING_BETA, _CONTEXT_1M_BETA}
+        return [b for b in betas if b not in _stripped]
+    if _is_bigmodel_anthropic_endpoint(base_url):
         _stripped = {_TOOL_STREAMING_BETA, _CONTEXT_1M_BETA}
         return [b for b in betas if b not in _stripped]
     if drop_context_1m_beta:
@@ -815,7 +834,19 @@ def build_anthropic_client(
         # Regular API key → x-api-key header + common betas
         kwargs["api_key"] = api_key
         if common_betas:
-            kwargs["default_headers"] = {"anthropic-beta": ",".join(common_betas)}
+            kwargs["default_headers"] = {"anthropic-beta": ", ".join(common_betas)}
+
+    # Workaround: anthropic SDK >= 0.87 injects an empty ``Authorization:
+    # Bearer`` header when the ``ANTHROPIC_AUTH_TOKEN`` env var exists but is
+    # empty (the SDK checks ``is None`` but the default falls back to
+    # ``os.environ.get()``, which returns ``""``).  The empty header value
+    # violates HTTP/1.1 and causes httpcore to raise
+    # ``LocalProtocolError: Illegal header value b'Bearer '``, which the
+    # SDK wraps as ``APIConnectionError: Connection error.``.  Clear the env
+    # var before constructing the client so the SDK sees ``None``.
+    _auth_token_env = "ANTHROPIC_AUTH_TOKEN"
+    if os.environ.get(_auth_token_env, "") == "" and "auth_token" not in kwargs:
+        os.environ.pop(_auth_token_env, None)
 
     return _anthropic_sdk.Anthropic(**kwargs)
 
