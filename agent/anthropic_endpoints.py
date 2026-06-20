@@ -145,6 +145,22 @@ def _is_minimax_anthropic_endpoint(base_url: str | None) -> bool:
     return _normalized_lower(base_url).startswith(_MINIMAX_ANTHROPIC_PREFIXES)
 
 
+def _is_bigmodel_anthropic_endpoint(base_url: str | None) -> bool:
+    """Return True for Z.AI / Zhipu BigModel Anthropic-compatible endpoints.
+
+    BigModel (open.bigmodel.cn/api/anthropic) rejects the
+    fine-grained-tool-streaming beta — requests with it trigger a
+    connection error, same symptom as MiniMax.
+    """
+    normalized = _normalize_base_url_text(base_url)
+    if not normalized:
+        return False
+    normalized = normalized.rstrip("/").lower()
+    return normalized.startswith(
+        ("https://open.bigmodel.cn/api/anthropic", "https://api.z.ai/api/anthropic")
+    )
+
+
 def _is_azure_anthropic_endpoint(base_url: str | None) -> bool:
     """Azure-hosted Anthropic Messages endpoints serving ``/anthropic``: modern Foundry
     (``*.services.ai.azure.*``) and legacy Azure OpenAI (``*.openai.azure.*``) hosts; opts them

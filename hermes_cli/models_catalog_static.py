@@ -183,7 +183,7 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
     ],
     "zai": [
         "glm-5.3", "glm-5.3-flash", "glm-5.2", "glm-5.1", "glm-5", "glm-5v-turbo", "glm-5-turbo",
-        "glm-4.7", "glm-4.5", "glm-4.5-flash",
+        "glm-4.7", "glm-4.6", "glm-4.6v", "glm-4.5", "glm-4.5-air", "glm-4.5-flash",
     ],
     "xai": list(_XAI_MODELS),
     # Nemotron flagships, then third-party agentic models hosted on build.nvidia.com.

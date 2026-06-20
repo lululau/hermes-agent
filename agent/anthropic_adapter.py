@@ -18,10 +18,10 @@ from utils import normalize_proxy_env_vars
 
 from agent.anthropic_credentials import _is_oauth_token
 from agent.anthropic_endpoints import (
-    _base_url_needs_context_1m_beta, _is_azure_anthropic_endpoint, _is_kimi_coding_endpoint,
-    _is_minimax_anthropic_endpoint, _is_nous_portal_endpoint, _is_opencode_endpoint,
-    _is_third_party_anthropic_endpoint, _model_name_is_kimi_family, _normalize_base_url_text,
-    _requires_bearer_auth,
+    _base_url_needs_context_1m_beta, _is_azure_anthropic_endpoint, _is_bigmodel_anthropic_endpoint,
+    _is_kimi_coding_endpoint, _is_minimax_anthropic_endpoint, _is_nous_portal_endpoint,
+    _is_opencode_endpoint, _is_third_party_anthropic_endpoint, _model_name_is_kimi_family,
+    _normalize_base_url_text, _requires_bearer_auth,
 )
 from agent.anthropic_message_convert import (
     convert_messages_to_anthropic, convert_tools_to_anthropic, normalize_model_name,
@@ -320,7 +320,7 @@ def _common_betas_for_base_url(base_url: str | None, *, drop_context_1m_beta: bo
     betas = list(_COMMON_BETAS)
     if _base_url_needs_context_1m_beta(base_url) and not drop_context_1m_beta:
         betas.append(_CONTEXT_1M_BETA)
-    if _is_minimax_anthropic_endpoint(base_url):
+    if _is_minimax_anthropic_endpoint(base_url) or _is_bigmodel_anthropic_endpoint(base_url):
         return [b for b in betas if b not in (_TOOL_STREAMING_BETA, _CONTEXT_1M_BETA)]
     return betas
 
@@ -474,6 +474,9 @@ def build_anthropic_client(api_key, base_url: str = None, timeout: float = None,
         # get these from profile.default_headers, but this route never sees the profile.
         for k, v in _attribution_headers().items():
             headers.setdefault(k, v)
+    _auth_token_env = "ANTHROPIC_AUTH_TOKEN"
+    if os.environ.get(_auth_token_env, "") == "" and "auth_token" not in kwargs:
+        os.environ.pop(_auth_token_env, None)
     return _new_sdk_client(sdk, kwargs, headers, route=base_url)
 
 
