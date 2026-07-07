@@ -66,6 +66,7 @@ export const MESSAGING_SESSION_SOURCE_IDS = [
   'api_server',
   'weixin',
   'wecom',
+  'wecom_stream',
   'qqbot',
   'yuanbao',
   'dingtalk',
