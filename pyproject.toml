@@ -558,6 +558,11 @@ packaging = false
 parallel-web = false
 pathspec = false
 pillow = false
+# pillow-heif: same missing-upload-date brick as pillow — Tencent/other mirror
+# indexes serve its wheels without upload dates, so the 14-day cutoff filters
+# every version ("there are no versions of pillow-heif"). Range pin
+# (>=1.4.0,<2), newest release well over 14 days old.
+pillow-heif = false
 prompt-toolkit = false
 psutil = false
 pvporcupine = false
